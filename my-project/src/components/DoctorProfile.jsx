@@ -1,6 +1,71 @@
 import { useState, useEffect } from 'react';
 import { toast } from 'react-toastify';
 import { getDoctorProfile, updateDoctorProfile } from '../api/doctorApi';
+import Calendar from 'react-calendar';
+import 'react-calendar/dist/Calendar.css';
+import TimePicker from 'react-time-picker';
+import 'react-time-picker/dist/TimePicker.css';
+
+const TimeSlotManager = ({ day, slots, onUpdate, onDelete }) => {
+  const [startTime, setStartTime] = useState('09:00');
+  const [endTime, setEndTime] = useState('17:00');
+
+  const handleAddSlot = () => {
+    if (startTime && endTime) {
+      onUpdate(day, startTime, endTime);
+      setStartTime('09:00');
+      setEndTime('17:00');
+    }
+  };
+
+  return (
+    <div className="p-4 border rounded-lg mb-4">
+      <h3 className="font-semibold mb-2">{day}</h3>
+      <div className="flex gap-4 mb-4">
+        <div>
+          <label className="block text-sm mb-1">Start Time</label>
+          <TimePicker
+            value={startTime}
+            onChange={setStartTime}
+            className="input-field"
+            format="HH:mm"
+          />
+        </div>
+        <div>
+          <label className="block text-sm mb-1">End Time</label>
+          <TimePicker
+            value={endTime}
+            onChange={setEndTime}
+            className="input-field"
+            format="HH:mm"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={handleAddSlot}
+          className="px-4 py-2 bg-primary-500 text-white rounded-lg self-end"
+        >
+          Add Slot
+        </button>
+      </div>
+      
+      <div className="space-y-2">
+        {slots.map((slot, index) => (
+          <div key={index} className="flex items-center justify-between bg-gray-50 p-2 rounded">
+            <span>{slot.startTime} - {slot.endTime}</span>
+            <button
+              type="button"
+              onClick={() => onDelete(day, index)}
+              className="text-red-500 hover:text-red-700"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
 
 export default function DoctorProfile() {
   const [isEditing, setIsEditing] = useState(false);
@@ -17,7 +82,8 @@ export default function DoctorProfile() {
     address: ''
   });
 
-  const [availabilityInput, setAvailabilityInput] = useState('');
+  const [selectedDay, setSelectedDay] = useState(null);
+  const [availabilityMap, setAvailabilityMap] = useState({});
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -36,9 +102,21 @@ export default function DoctorProfile() {
     fetchProfile();
   }, []);
 
+  useEffect(() => {
+    if (profile.availability) {
+      const map = profile.availability.reduce((acc, slot) => {
+        if (!acc[slot.day]) {
+          acc[slot.day] = [];
+        }
+        acc[slot.day].push({ startTime: slot.startTime, endTime: slot.endTime });
+        return acc;
+      }, {});
+      setAvailabilityMap(map);
+    }
+  }, [profile.availability]);
+
   const formatAvailabilityForDisplay = (availability) => {
     if (!availability || availability.length === 0) {
-      setAvailabilityInput('');
       return;
     }
     
@@ -46,7 +124,7 @@ export default function DoctorProfile() {
       `${slot.day} ${slot.startTime}-${slot.endTime}`
     ).join('\n');
     
-    setAvailabilityInput(formatted);
+    // This function is now empty as the availability is managed by availabilityMap
   };
 
   const parseAvailability = (input) => {
@@ -73,7 +151,7 @@ export default function DoctorProfile() {
     const { name, value } = e.target;
     
     if (name === 'availabilityInput') {
-      setAvailabilityInput(value);
+      // This input is now managed by the TimeSlotManager
     } else {
       setProfile({
         ...profile,
@@ -82,20 +160,47 @@ export default function DoctorProfile() {
     }
   };
 
+  const handleDayClick = (value) => {
+    const day = value.toLocaleDateString('en-US', { weekday: 'long' });
+    setSelectedDay(day);
+  };
+
+  const handleAddTimeSlot = (day, startTime, endTime) => {
+    setAvailabilityMap(prev => ({
+      ...prev,
+      [day]: [...(prev[day] || []), { startTime, endTime }]
+    }));
+  };
+
+  const handleDeleteTimeSlot = (day, index) => {
+    setAvailabilityMap(prev => ({
+      ...prev,
+      [day]: prev[day].filter((_, i) => i !== index)
+    }));
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      // Convert string lists back to arrays and parse availability
+      const availability = Object.entries(availabilityMap).flatMap(([day, slots]) =>
+        slots.map(slot => ({
+          day,
+          startTime: slot.startTime,
+          endTime: slot.endTime
+        }))
+      );
+
       const updatedProfile = {
         ...profile,
         specialization: profile.specialization ? profile.specialization.split(',').map(item => item.trim()) : [],
-        availability: parseAvailability(availabilityInput)
+        availability
       };
       
       await updateDoctorProfile(updatedProfile);
       setIsEditing(false);
       toast.success('Profile updated successfully');
     } catch (error) {
+      console.error('Error saving profile:', error);
       toast.error('Failed to update profile');
     }
   };
@@ -267,34 +372,41 @@ export default function DoctorProfile() {
           <div className="md:col-span-2 mb-4">
             <label className="block text-secondary-700 mb-2">
               Availability Schedule
-              {isEditing && (
-                <span className="text-xs text-secondary-500 ml-2">
-                  (Format: "Day StartTime-EndTime" e.g., "Monday 09:00-17:00")
-                </span>
-              )}
             </label>
             {isEditing ? (
-              <textarea
-                name="availabilityInput"
-                value={availabilityInput}
-                onChange={handleChange}
-                className="input-field"
-                rows="5"
-                placeholder="Monday 09:00-17:00&#10;Tuesday 10:00-18:00&#10;..."
-              ></textarea>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="border rounded-lg p-4">
+                  <Calendar
+                    onChange={handleDayClick}
+                    value={new Date()}
+                    className="w-full"
+                  />
+                </div>
+                <div className="border rounded-lg p-4">
+                  {selectedDay && (
+                    <TimeSlotManager
+                      day={selectedDay}
+                      slots={availabilityMap[selectedDay] || []}
+                      onUpdate={handleAddTimeSlot}
+                      onDelete={handleDeleteTimeSlot}
+                    />
+                  )}
+                </div>
+              </div>
             ) : (
               <div className="py-2">
-                {profile.availability && profile.availability.length > 0 ? (
-                  <ul className="list-disc pl-5">
-                    {profile.availability.map((slot, index) => (
-                      <li key={index}>
-                        {slot.day}: {slot.startTime} - {slot.endTime}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p>No availability set</p>
-                )}
+                {Object.entries(availabilityMap).map(([day, slots]) => (
+                  <div key={day} className="mb-2">
+                    <h3 className="font-semibold">{day}</h3>
+                    <ul className="list-disc pl-5">
+                      {slots.map((slot, index) => (
+                        <li key={index}>
+                          {slot.startTime} - {slot.endTime}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
               </div>
             )}
           </div>
